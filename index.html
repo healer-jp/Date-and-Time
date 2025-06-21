@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <title>任意タイムゾーン対応クロック</title>
+  <style>
+    body {
+      font-family: sans-serif;
+      padding: 20px;
+    }
+    #controls {
+      margin-bottom: 1rem;
+    }
+    #clock {
+      font-size: 2rem;
+      transition: color 0.5s;
+    }
+    /* 曜日ごとの色 */
+    #clock.sun { color: #e74c3c; }
+    #clock.mon { color: #3498db; }
+    #clock.tue { color: #2ecc71; }
+    #clock.wed { color: #9b59b6; }
+    #clock.thu { color: #f1c40f; }
+    #clock.fri { color: #e67e22; }
+    #clock.sat { color: #1abc9c; }
+    #error {
+      color: #c0392b;
+      margin-left: 1em;
+    }
+  </style>
+</head>
+<body>
+  <div id="controls">
+    <label for="tzInput">タイムゾーン：</label>
+    <input
+      id="tzInput"
+      list="tzList"
+      placeholder="例: Asia/Tokyo"
+      style="width:240px;"
+    >
+    <datalist id="tzList">
+      <option value="Asia/Tokyo">         <!-- 日本標準時（東京） -->
+      <option value="Asia/Kolkata">       <!-- インド標準時（デリー） --> 
+      <option value="Africa/Cairo">       <!-- 東ヨーロッパ時間（カイロ） -->
+      <option value="Europe/London">      <!-- グリニッジ標準時／英国夏時間（ロンドン） -->
+      <option value="America/New_York">   <!-- 東部標準時／夏時間（ワシントンD.C.） -->
+    </datalist>
+    <span id="error"></span>
+  </div>
+
+  <div id="clock">読み込み中…</div>
+
+  <script>
+  (function(){
+    const elClock     = document.getElementById('clock');
+    const elInput     = document.getElementById('tzInput');
+    const elError     = document.getElementById('error');
+    const weekClasses = ['sun','mon','tue','wed','thu','fri','sat'];
+    const weekJP      = ['日','月','火','水','木','金','土'];
+
+    // デフォルトは東京
+    let timeZone  = 'Asia/Tokyo';
+    let formatter = createFormatter(timeZone);
+    elInput.value = timeZone;
+
+    function createFormatter(tz){
+      return new Intl.DateTimeFormat('ja-JP', {
+        timeZone: tz,
+        year:     'numeric',
+        month:    'numeric',
+        day:      'numeric',
+        hour:     'numeric',
+        minute:   'numeric',
+        weekday:  'short'
+      });
+    }
+
+    function onTimeZoneChange(){
+      const tz = elInput.value.trim();
+      try {
+        const f = createFormatter(tz);
+        timeZone  = tz;
+        formatter = f;
+        elError.textContent = '';
+        updateClock(true);
+      }
+      catch {
+        elError.textContent = '無効なタイムゾーンです';
+      }
+    }
+
+    elInput.addEventListener('change', onTimeZoneChange);
+    elInput.addEventListener('blur',   onTimeZoneChange);
+    elInput.addEventListener('keydown', e => {
+      if (e.key === 'Enter') onTimeZoneChange();
+    });
+
+    let lastDisplay = '';
+    function updateClock(force){
+      const now   = new Date();
+      const parts = formatter.formatToParts(now);
+      let Y,M,D,h,m,w;
+      parts.forEach(p => {
+        if (p.type==='year')    Y = p.value;
+        if (p.type==='month')   M = p.value;
+        if (p.type==='day')     D = p.value;
+        if (p.type==='hour')    h = p.value;
+        if (p.type==='minute')  m = p.value;
+        if (p.type==='weekday') w = p.value;  // "日"～"土"
+      });
+
+      const text = `${Y}年${M}月${D}日(${w}) ${h}時${m}分`;
+      if (force || text !== lastDisplay){
+        lastDisplay = text;
+        elClock.textContent = text;
+        const idx = weekJP.indexOf(w);
+        elClock.className = weekClasses[idx] || '';
+      }
+    }
+
+    updateClock(true);
+    setInterval(() => updateClock(false), 1000);
+  })();
+  </script>
+</body>
+</html>
