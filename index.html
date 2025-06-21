@@ -2,134 +2,173 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
-  <title>任意タイムゾーン対応クロック</title>
+  <title>地図UI付きワールドクロック（DST＆祝日対応）</title>
+  <!-- Leaflet -->
+  <link
+    rel="stylesheet"
+    href="https://unpkg.com/leaflet/dist/leaflet.css"
+  />
   <style>
-    body {
+    body, html { margin: 0; padding: 0; height: 100%; }
+    #map { width: 100%; height: 60%; }
+    #panel {
+      display: flex;
+      flex-wrap: wrap;
+      padding: 0.5rem;
+      background: #f0f0f0;
+      border-top: 1px solid #ccc;
+    }
+    .clock-box {
+      flex: 1 1 200px;
+      margin: 0.5rem;
+      padding: 0.5rem;
+      background: #fff;
+      border: 1px solid #ddd;
+      border-radius: 4px;
       font-family: sans-serif;
-      padding: 20px;
     }
-    #controls {
-      margin-bottom: 1rem;
+    .clock-box h4 {
+      margin: 0 0 .3em;
+      font-size: 1rem;
     }
-    #clock {
-      font-size: 2rem;
-      transition: color 0.5s;
+    .time {
+      font-size: 1.4rem;
     }
     /* 曜日ごとの色 */
-    #clock.sun { color: #e74c3c; }
-    #clock.mon { color: #3498db; }
-    #clock.tue { color: #2ecc71; }
-    #clock.wed { color: #9b59b6; }
-    #clock.thu { color: #f1c40f; }
-    #clock.fri { color: #e67e22; }
-    #clock.sat { color: #1abc9c; }
-    #error {
-      color: #c0392b;
-      margin-left: 1em;
-    }
+    .sun { color: #e74c3c; }
+    .mon { color: #3498db; }
+    .tue { color: #2ecc71; }
+    .wed { color: #9b59b6; }
+    .thu { color: #f1c40f; }
+    .fri { color: #e67e22; }
+    .sat { color: #1abc9c; }
+    .holiday { color: #c0392b !important; }
   </style>
 </head>
 <body>
-  <div id="controls">
-    <label for="tzInput">タイムゾーン：</label>
-    <input
-      id="tzInput"
-      list="tzList"
-      placeholder="例: Asia/Tokyo"
-      style="width:200px;"
-    >
-    <datalist id="tzList">
-      <option value="UTC">
-      <option value="Asia/Tokyo">
-      <option value="Europe/London">
-      <option value="America/New_York">
-      <option value="Asia/Shanghai">
-      <option value="Australia/Sydney">
-      <!-- ここに候補を増やしてもOK -->
-    </datalist>
-    <span id="error"></span>
-  </div>
 
-  <div id="clock">読み込み中…</div>
+<div id="map"></div>
+<div id="panel">
+  <em>地図をクリックしてタイムゾーンを追加してください。</em>
+</div>
 
-  <script>
-  (function(){
-    const elClock    = document.getElementById('clock');
-    const elInput    = document.getElementById('tzInput');
-    const elError    = document.getElementById('error');
-    const weekClasses= ['sun','mon','tue','wed','thu','fri','sat'];
-    const weekJP     = ['日','月','火','水','木','金','土'];
+<!-- Leaflet -->
+<script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+<!-- tz-lookup for IANA zone by lat/lng -->
+<script src="https://unpkg.com/tz-lookup@6.1.22/tz.js"></script>
+<script>
+;(function(){
+  const WEEK_JP      = ['日','月','火','水','木','金','土'];
+  const WEEK_CLS     = ['sun','mon','tue','wed','thu','fri','sat'];
+  const panel        = document.getElementById('panel');
+  const selectedZones = {};   // tz → zoneData
 
-    // デフォルトタイムゾーン
-    let timeZone = 'Asia/Tokyo';
-    let formatter = createFormatter(timeZone);
+  // countryCode mapping for holidays (only these ISO codes will fetch)
+  const TZ2CC = {
+    'Asia/Tokyo':      'JP',
+    'Asia/Kolkata':    'IN',
+    'Africa/Cairo':    'EG',
+    'America/New_York':'US',
+    'UTC':             null
+  };
 
-    // 入力欄の初期値
-    elInput.value = timeZone;
+  // initialize Leaflet map
+  const map = L.map('map', {
+    center: [20,0],
+    zoom: 2,
+    attributionControl: false
+  });
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{
+    maxZoom: 5, minZoom:1
+  }).addTo(map);
 
-    // タイムゾーン文字列からIntl.DateTimeFormatを作成
-    function createFormatter(tz){
-      return new Intl.DateTimeFormat('ja-JP', {
-        timeZone: tz,
-        year:    'numeric',
-        month:   'numeric',
-        day:     'numeric',
-        hour:    'numeric',
-        minute:  'numeric',
-        weekday: 'short'
-      });
-    }
+  // on map click: add zone
+  map.on('click', async e => {
+    let tz;
+    try { tz = tzlookup(e.latlng.lat, e.latlng.lng); }
+    catch { return; }
+    if (selectedZones[tz]) return;       // already added
+    const name = tz;
+    // compute UTC offset string e.g. "GMT+9"
+    const offStr = Intl.DateTimeFormat('en', {
+      timeZone: tz,
+      timeZoneName: 'short'
+    }).format(new Date()).split(' ').pop();
 
-    // ユーザーが入力を確定したら（フォーカスアウト or Enter）
-    function onTimeZoneChange(){
-      const tz = elInput.value.trim();
+    // prepare zoneData
+    const z = {
+      tz, name: name + ' (' + offStr + ')',
+      fmt: new Intl.DateTimeFormat('ja-JP',{ timeZone:tz,
+        year:'numeric',month:'numeric',day:'numeric',
+        hour:'numeric',minute:'numeric',weekday:'short'
+      }),
+      holidays: null,
+      cc: TZ2CC[tz] || tz.split('/')[0]   // fallback
+    };
+    selectedZones[tz] = z;
+
+    // create clock box
+    const box = document.createElement('div');
+    box.id = 'box_' + tz.replace(/[^A-Za-z0-9]/g,'_');
+    box.className = 'clock-box';
+    box.innerHTML = `<h4>${z.name}</h4><div class="time">読み込み中…</div>`;
+    panel.appendChild(box);
+
+    // fetch holidays if ISO code known
+    if (z.cc) {
       try {
-        // 試しにフォーマッタを作ってみる
-        const f = createFormatter(tz);
-        timeZone = tz;
-        formatter = f;
-        elError.textContent = '';
-        updateClock(true);
-      }
-      catch(e){
-        elError.textContent = '無効なタイムゾーンです';
-      }
+        const year = new Date().getFullYear();
+        const res  = await fetch(
+          `https://date.nager.at/api/v3/PublicHolidays/${year}/${z.cc}`
+        );
+        if (res.ok) {
+          const data = await res.json();
+          z.holidays = data.map(h=> {
+            const d = new Date(h.date);
+            return String(d.getMonth()+1).padStart(2,'0')
+                 + '-' + String(d.getDate()).padStart(2,'0');
+          });
+        }
+      } catch {}
     }
 
-    elInput.addEventListener('change', onTimeZoneChange);
-    elInput.addEventListener('blur',   onTimeZoneChange);
-    elInput.addEventListener('keydown', e => {
-      if(e.key === 'Enter') onTimeZoneChange();
+    updateAll(true);
+  });
+
+  // update clocks
+  let lastText = {};
+  function updateAll(force){
+    Object.values(selectedZones).forEach(z => {
+      const parts = z.fmt.formatToParts(new Date());
+      const p = {};
+      parts.forEach(o=> p[o.type]=o.value);
+      const text = `${p.year}年${p.month}月${p.day}日(${p.weekday}) ${p.hour}時${p.minute}分`;
+      if (force || lastText[z.tz] !== text){
+        lastText[z.tz] = text;
+        const box = document.getElementById(
+          'box_' + z.tz.replace(/[^A-Za-z0-9]/g,'_')
+        );
+        const timeEl = box.querySelector('.time');
+        timeEl.textContent = text;
+        // weekday color
+        const wd = WEEK_JP.indexOf(p.weekday);
+        box.className = 'clock-box ' + WEEK_CLS[wd];
+        // holiday?
+        if (z.holidays) {
+          const mmdd = p.month.padStart(2,'0') + '-' + p.day.padStart(2,'0');
+          if (z.holidays.includes(mmdd)) {
+            timeEl.classList.add('holiday');
+          } else {
+            timeEl.classList.remove('holiday');
+          }
+        }
+      }
     });
+  }
 
-    let lastDisplay = '';
-    function updateClock(force){
-      const now    = new Date();
-      const parts  = formatter.formatToParts(now);
-      let Y,M,D,h,m,w;
-
-      parts.forEach(p=>{
-        if(p.type==='year')    Y = p.value;
-        if(p.type==='month')   M = p.value;
-        if(p.type==='day')     D = p.value;
-        if(p.type==='hour')    h = p.value;
-        if(p.type==='minute')  m = p.value;
-        if(p.type==='weekday') w = p.value;  // "日"～"土"
-      });
-
-      const text = `${Y}年${M}月${D}日(${w}) ${h}時${m}分`;
-      if(force || text !== lastDisplay){
-        lastDisplay = text;
-        elClock.textContent = text;
-        const idx = weekJP.indexOf(w);
-        elClock.className = weekClasses[idx] || '';
-      }
-    }
-
-    // 初回と毎秒
-    updateClock(true);
-    setInterval(() => updateClock(false), 1000);
-  })();
-  </script>
+  // tick every second
+  setInterval(()=> updateAll(false), 1000);
+})();
+</script>
 </body>
 </html>
