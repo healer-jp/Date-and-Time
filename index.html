@@ -2,73 +2,46 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
-  <title>地図UI付きワールドクロック（改善版）</title>
+  <title>地図UI付きワールドクロック（geo-tz版）</title>
   <!-- Leaflet CSS -->
   <link
     rel="stylesheet"
     href="https://unpkg.com/leaflet/dist/leaflet.css"
   />
   <style>
-    /* 全体を縦Flexレイアウトに */
-    html, body {
-      margin: 0;
-      height: 100%;
-    }
-    body {
-      display: flex;
-      flex-direction: column;
-    }
-
-    /* 地図領域：残り全てを占有 */
-    #map {
-      flex: 1;
-    }
-
-    /* パネル：高さ固定＋スクロール可 */
+    html,body { margin:0; padding:0; height:100% }
+    body { display:flex; flex-direction:column }
+    #map { flex:1 }
     #panel {
-      height: 150px;
-      overflow-y: auto;
-      background: #f8f8f8;
-      border-top: 1px solid #ccc;
-      display: flex;
-      align-items: center;
-      padding: 0 0.5rem;
-      font-family: sans-serif;
+      height:150px;
+      overflow-y:auto;
+      padding:0.5rem;
+      background:#f8f8f8;
+      border-top:1px solid #ccc;
+      font-family:sans-serif;
     }
-    #panel em {
-      flex: 1;
-      color: #666;
-    }
-
-    /* 時計ボックス */
     .clock-box {
-      min-width: 180px;
-      margin: 0.5rem;
-      padding: 0.4rem 0.6rem;
-      background: #fff;
-      border: 1px solid #ddd;
-      border-radius: 4px;
-      box-shadow: 0 1px 2px rgba(0,0,0,0.1);
-      font-family: sans-serif;
+      display:inline-block;
+      vertical-align:top;
+      width:180px;
+      margin:0.3rem;
+      padding:0.4rem;
+      background:#fff;
+      border:1px solid #ddd;
+      border-radius:4px;
+      text-align:center;
     }
-    .clock-box h4 {
-      margin: 0 0 .2em;
-      font-size: 0.95rem;
-    }
-    .time {
-      font-size: 1.2rem;
-    }
-    /* 曜日別カラー */
-    .sun .time { color: #e74c3c; }
-    .mon .time { color: #3498db; }
-    .tue .time { color: #2ecc71; }
-    .wed .time { color: #9b59b6; }
-    .thu .time { color: #f1c40f; }
-    .fri .time { color: #e67e22; }
-    .sat .time { color: #1abc9c; }
-
-    /* 祝日ハイライト */
-    .holiday { font-weight: bold; }
+    .clock-box h4 { margin:0 0.2em; font-size:0.9rem }
+    .time { font-size:1.2rem }
+    /* 曜日カラー */
+    .sun .time { color:#e74c3c }
+    .mon .time { color:#3498db }
+    .tue .time { color:#2ecc71 }
+    .wed .time { color:#9b59b6 }
+    .thu .time { color:#f1c40f }
+    .fri .time { color:#e67e22 }
+    .sat .time { color:#1abc9c }
+    .holiday { font-weight:bold }
   </style>
 </head>
 <body>
@@ -80,16 +53,16 @@
 
   <!-- Leaflet JS -->
   <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
-  <!-- tz-lookup for IANA zone by lat/lng -->
-  <script src="https://unpkg.com/tz-lookup@6.1.22/tz.js"></script>
+  <!-- geo-tz UMD -->
+  <script src="https://cdn.jsdelivr.net/npm/geo-tz@6.2.0/dist/geo-tz.min.js"></script>
   <script>
   (function(){
     const WEEK_JP   = ['日','月','火','水','木','金','土'];
     const WEEK_CLS  = ['sun','mon','tue','wed','thu','fri','sat'];
     const panel     = document.getElementById('panel');
-    const zones     = {};  // tz → {fmt,cc,holidays,…}
+    const zones     = {};  // { [tz]: {fmt,cc,holidays,…} }
 
-    // ISO国コード（祝日API用）
+    // ISOコードマップ（祝日API用）
     const TZ2CC = {
       'Asia/Tokyo':       'JP',
       'Asia/Kolkata':     'IN',
@@ -97,51 +70,47 @@
       'America/New_York': 'US'
     };
 
-    // Leaflet map 初期化
+    // Leaflet マップ初期化
     const map = L.map('map', {
-      center: [20,0],
-      zoom: 2,
-      attributionControl: false
+      center: [20,0], zoom:2, attributionControl:false
     });
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      maxZoom: 5, minZoom: 1
+      maxZoom:5, minZoom:1
     }).addTo(map);
 
-    // 地図クリックでタイムゾーン追加
+    // クリックで zone 追加
     map.on('click', async e => {
-      let tz;
-      try { tz = tzlookup(e.latlng.lat, e.latlng.lng); }
-      catch { return; }
+      // geo-tz で取得（返り値は文字列配列）
+      const tzas = geoTz(e.latlng.lat, e.latlng.lng);
+      if (!tzas || !tzas.length) return;
+      const tz = tzas[0];
       if (zones[tz]) return;  // すでに追加済み
 
-      // オフセット表示（例 "GMT+9"）
+      // GMTオフセット（例 GMT+9）
       const off = Intl.DateTimeFormat('en', {
-        timeZone: tz, timeZoneName: 'short'
+        timeZoneName:'short', timeZone:tz
       }).format(new Date()).split(' ').pop();
 
-      // フォーマッタ作成
+      // Intlフォーマッタ
       const fmt = new Intl.DateTimeFormat('ja-JP', {
         timeZone: tz,
-        year:    'numeric',
-        month:   'numeric',
-        day:     'numeric',
-        hour:    'numeric',
-        minute:  'numeric',
+        year: 'numeric', month: 'numeric', day: 'numeric',
+        hour: 'numeric', minute: 'numeric',
         weekday: 'short'
       });
 
-      // 祝日取得（Nager.Date API）
+      // 祝日API取得
       let holidays = null;
       const cc = TZ2CC[tz];
       if (cc) {
         try {
           const year = new Date().getFullYear();
-          const res  = await fetch(
+          const res = await fetch(
             `https://date.nager.at/api/v3/PublicHolidays/${year}/${cc}`
           );
           if (res.ok) {
             const arr = await res.json();
-            holidays = arr.map(h=>{
+            holidays = arr.map(h => {
               const d = new Date(h.date);
               return String(d.getMonth()+1).padStart(2,'0')
                    + '-' + String(d.getDate()).padStart(2,'0');
@@ -150,14 +119,15 @@
         } catch {}
       }
 
-      // データ格納
-      zones[tz] = { tz, off, fmt, holidays };
+      zones[tz] = { fmt, holidays };
 
-      // マーカー＆ポップアップでフィードバック
-      const m = L.marker([e.latlng.lat, e.latlng.lng]).addTo(map);
-      m.bindPopup(`${tz} <br> ${off}`).openPopup();
+      // マーカー＋ポップアップで即フィードバック
+      L.marker([e.latlng.lat, e.latlng.lng])
+       .addTo(map)
+       .bindPopup(`${tz}<br>${off}`)
+       .openPopup();
 
-      // 時計ボックス追加
+      // ボックス追加
       const id = 'box_' + tz.replace(/[^A-Za-z0-9]/g,'_');
       const box = document.createElement('div');
       box.id = id;
@@ -165,41 +135,36 @@
       box.innerHTML = `<h4>${tz} (${off})</h4><div class="time">読み込み中…</div>`;
       panel.appendChild(box);
 
-      // 追加直後に更新
       updateAll(true);
     });
 
     let last = {};
     function updateAll(force){
-      Object.values(zones).forEach(z => {
-        const parts = z.fmt.formatToParts(new Date());
-        const p = {}; parts.forEach(o => p[o.type] = o.value);
-        const text = `${p.year}年${p.month}月${p.day}日(${p.weekday}) ${p.hour}時${p.minute}分`;
-        if (force || last[z.tz] !== text) {
-          last[z.tz] = text;
+      const now = new Date();
+      Object.entries(zones).forEach(([tz,z])=>{
+        const parts = z.fmt.formatToParts(now);
+        const p = {}; parts.forEach(o=>p[o.type]=o.value);
+        const txt = `${p.year}年${p.month}月${p.day}日(${p.weekday}) ${p.hour}時${p.minute}分`;
+        if (force || last[tz] !== txt) {
+          last[tz] = txt;
           const box = document.getElementById(
-            'box_' + z.tz.replace(/[^A-Za-z0-9]/g,'_')
+            'box_' + tz.replace(/[^A-Za-z0-9]/g,'_')
           );
-          // テキスト更新
           const timeEl = box.querySelector('.time');
-          timeEl.textContent = text;
-          // 曜日でクラス切替
+          timeEl.textContent = txt;
+          // 色分け
           const wd = WEEK_JP.indexOf(p.weekday);
           box.className = 'clock-box ' + WEEK_CLS[wd];
-          // 祝日なら赤太字
+          // 祝日強調
           if (z.holidays) {
             const mmdd = p.month.padStart(2,'0') + '-' + p.day.padStart(2,'0');
-            if (z.holidays.includes(mmdd)) {
-              timeEl.classList.add('holiday');
-            } else {
-              timeEl.classList.remove('holiday');
-            }
+            timeEl.classList.toggle('holiday', z.holidays.includes(mmdd));
           }
         }
       });
     }
 
-    // 1秒ごとに分変動チェック＆更新
+    // 毎秒更新
     setInterval(() => updateAll(false), 1000);
   })();
   </script>
